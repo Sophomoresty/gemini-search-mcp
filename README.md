@@ -2,24 +2,42 @@
 
 Reverse-proxy Google Search AI Mode as an OpenAI-compatible API.
 
-Free, no API key, no Google account. Responses include real-time web search results.
+**Pure protocol — no browser, no JS engine.** Just HTTP requests with cookies. Free, no API key, no Google account.
 
 ## How it works
 
-Google Search AI Mode (powered by Gemini) provides grounded AI answers with live web search. This tool automates a real Chrome browser to interact with AI Mode and exposes responses through a standard OpenAI-compatible API.
+Google Search AI Mode (powered by Gemini) serves AI answers via two HTTP endpoints:
+
+1. `GET /search?q=<q>&udm=50` — returns a 360KB HTML page with session tokens (`data-srtst`, `data-xsrf-folwr-token`, `data-garc`, `data-stkp`, etc.) embedded in `data-*` attributes
+2. `GET /async/folwr?<tokens>&q=<q>` — streams the AI answer as HTML chunks
+
+This tool does both via plain `urllib` (zero browser dependencies), parses the answer HTML, and exposes it as an OpenAI-compatible API.
 
 ## Quick Start
 
 ```bash
-# Install
-pip install playwright fastapi uvicorn
-playwright install chrome
+pip install -e .
 
-# Run
-python -m google_ai_mode
+# Export cookies from a logged-in browser session (includes HttpOnly cookies)
+# Then run:
+python -m google_ai_mode --cookie-file cookies.txt
 ```
 
-Server starts at `http://localhost:8080/v1`. That's it.
+Server starts at `http://localhost:8080/v1`.
+
+### Getting cookies
+
+The `__Secure-STRP`, `NID`, `AEC`, `__Secure-BUCKET` cookies (some HttpOnly) are required for the full 360KB token-bearing response. Anonymous requests get only a 91KB JS-required shell.
+
+**Export via browser DevTools:**
+1. Open Google Search, log in (optional but improves reliability)
+2. DevTools → Application → Cookies → `.google.com` / `.google.com.hk`
+3. Copy all as `name=value; name=value` into `cookies.txt`
+
+**Export via CDP** (if you have a Chrome debug port):
+```bash
+# See protocol.py get_cookies helper, or use a CDP cookie exporter
+```
 
 ## Usage
 
@@ -27,7 +45,7 @@ Server starts at `http://localhost:8080/v1`. That's it.
 # Non-streaming
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"google-ai-mode","messages":[{"role":"user","content":"What happened in the news today?"}]}'
+  -d '{"model":"google-ai-mode","messages":[{"role":"user","content":"What is the Bitcoin price today?"}]}'
 
 # Streaming
 curl http://localhost:8080/v1/chat/completions \
@@ -35,45 +53,54 @@ curl http://localhost:8080/v1/chat/completions \
   -d '{"model":"google-ai-mode","stream":true,"messages":[{"role":"user","content":"Explain quantum computing"}]}'
 ```
 
-Works with any OpenAI-compatible client (Cherry Studio, ChatBox, Open WebUI, etc.):
+Works with any OpenAI-compatible client:
 
 | Field | Value |
 |-------|-------|
 | Base URL | `http://localhost:8080/v1` |
-| API Key | anything |
+| API Key | anything (unless `--api-key` set) |
 | Model | `google-ai-mode` |
 
-## Platform Support
-
-| Platform | Browser | Status |
-|----------|---------|--------|
-| Windows | Chrome / Edge | Works out of the box |
-| macOS | Chrome / Edge | Works out of the box |
-| Linux | Chrome / Chromium | Works (may need `playwright install chrome`) |
-| Docker | Bundled Chromium | Works with stealth patches |
-
-The server auto-detects your system browser. Priority: Chrome → Edge → Chromium.
-
-## Options
+## CLI Options
 
 ```
-python -m google_ai_mode [OPTIONS]
-
 --port          API port (default: 8080)
 --host          Bind address (default: 0.0.0.0)
---cdp-url       Connect to existing Chrome DevTools (e.g. http://127.0.0.1:9222)
---channel       Browser: chrome, msedge, chromium (default: chrome)
---no-headless   Show browser window for debugging
---pool-size N   Concurrent browser tabs (default: 1)
+--cookie-file   File with Google cookies (includes HttpOnly)
+--cookies       Inline cookie string
+--api-key       Allowed API key (repeatable; omit to disable auth)
+--proxy         HTTP proxy
 ```
 
-### If you get CAPTCHA errors
+## Features
 
-Google may detect automated browsers. Solutions in order of reliability:
+- **Zero browser deps**: pure stdlib `urllib`, ~5MB footprint
+- **OpenAI-compatible**: `/v1/chat/completions` (streaming + non-streaming), `/v1/models`
+- **Real-time web search**: AI Mode grounds answers in live web results
+- **Cookie auto-refresh**: captures `Set-Cookie` to keep tokens fresh
+- **Retry with backoff**: handles HTTP 429 rate limits
+- **System prompts**: concatenated with user message
 
-1. **Use system Chrome** (default): `python -m google_ai_mode --channel chrome`
-2. **Connect to your own Chrome**: Launch Chrome with `--remote-debugging-port=9222`, then `python -m google_ai_mode --cdp-url http://127.0.0.1:9222`
-3. **Try Edge**: `python -m google_ai_mode --channel msedge`
+## Architecture
+
+```
+User query
+  → GET /search?q=<q>&udm=50  (with cookies)
+  → extract tokens from data-* attributes
+  → GET /async/folwr?<tokens>&q=<q>
+  → parse answer from <div class="n6owBd"> containers
+  → OpenAI-compatible response
+```
+
+Each request is stateless: a fresh page load + folwr per query. Token lifetime is ~5 minutes; cookies are refreshed automatically.
+
+## Limitations
+
+- **Cookies required**: needs browser-exported cookies (HttpOnly ones essential). Without them, Google returns a 91KB JS-required shell with no tokens.
+- **Rate limits**: Google throttles aggressive use (~429 after bursts). Built-in retry handles this, but high-volume use needs cookie/IP rotation.
+- **Streaming granularity**: folwr delivers answer in 2-5 chunks (~300ms intervals), not per-token.
+- **Class-name fragility**: answer extraction relies on Google's CSS classes (`n6owBd`, `pTRUV`); Google may rename them.
+- **No conversation memory**: each request is independent (fresh session).
 
 ## Docker
 
@@ -81,25 +108,7 @@ Google may detect automated browsers. Solutions in order of reliability:
 docker compose up -d
 ```
 
-Note: Docker uses bundled Chromium which may trigger CAPTCHA more often. For production, prefer connecting to an external Chrome via `--cdp-url`.
-
-## Features
-
-- OpenAI-compatible `/v1/chat/completions` and `/v1/models`
-- SSE streaming
-- Real-time web search grounding (built into AI Mode)
-- System prompt support
-- Concurrent request pool (multi-tab)
-- Auto-recovery on session failure
-- Cross-platform (Windows / macOS / Linux / Docker)
-
-## Limitations
-
-- First response takes ~5-10s (Gemini searches the web before answering)
-- Streaming is chunked (~300ms intervals, not per-token)
-- No conversation memory between requests (each is independent)
-- No native function/tool calling (AI Mode handles search internally)
-- Requires a Chrome-family browser installed
+Mount cookies via volume or pass as env.
 
 ## License
 
