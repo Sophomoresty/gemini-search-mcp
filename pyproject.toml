@@ -1,7 +1,7 @@
 [project]
-name = "google-ai-mode"
-version = "0.3.0"
-description = "Reverse-proxy Google Search AI Mode as OpenAI-compatible API and MCP server — unlimited, no rate limit"
+name = "gemini-search-mcp"
+version = "0.4.0"
+description = "MCP server for web search powered by Google AI Mode (Gemini). Free, unlimited, no API key."
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
@@ -13,8 +13,8 @@ dependencies = [
 ]
 
 [project.scripts]
-google-ai-mode = "google_ai_mode.server:main"
-google-ai-mode-mcp = "google_ai_mode_mcp:main"
+gemini-search = "gemini_search.server:main"
+gemini-search-mcp = "gemini_search_mcp:main"
 
 [build-system]
 requires = ["setuptools>=68"]

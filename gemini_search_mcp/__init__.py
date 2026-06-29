@@ -1,4 +1,4 @@
-"""Google AI Mode MCP Server — free web search for AI agents.
+"""Gemini Search MCP Server — free web search for AI agents.
 
 Exposes Google Search AI Mode as MCP tools. Any MCP-compatible client
 (Claude Desktop, Claude Code, Cursor, etc.) can call these tools to get
@@ -9,9 +9,9 @@ from typing import Optional
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
-from google_ai_mode.engine import AIModeEngine
+from gemini_search.engine import AIModeEngine
 
-mcp = FastMCP(name="Google AI Mode")
+mcp = FastMCP(name="Gemini Search")
 READONLY = ToolAnnotations(readOnlyHint=True)
 
 _engine: Optional[AIModeEngine] = None

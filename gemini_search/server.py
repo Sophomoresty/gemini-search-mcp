@@ -29,7 +29,7 @@ app = FastAPI(lifespan=lifespan)
 
 @app.get("/v1/models")
 async def list_models():
-    return {"object": "list", "data": [{"id": "google-ai-mode", "object": "model", "created": 1719600000, "owned_by": "google"}]}
+    return {"object": "list", "data": [{"id": "gemini-search", "object": "model", "created": 1719600000, "owned_by": "google"}]}
 
 
 @app.post("/v1/chat/completions")
@@ -37,7 +37,7 @@ async def chat_completions(request: Request):
     body = await request.json()
     messages = body.get("messages", [])
     stream = body.get("stream", False)
-    model = body.get("model", "google-ai-mode")
+    model = body.get("model", "gemini-search")
 
     prompt = _build_prompt(messages)
     if not prompt:
@@ -84,7 +84,7 @@ def _build_prompt(messages):
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Google AI Mode → OpenAI API (Playwright, unlimited)")
+    parser = argparse.ArgumentParser(description="Gemini Search → OpenAI API (Playwright, unlimited)")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--cdp-url", default=None, help="Connect to existing Chrome (e.g. http://127.0.0.1:9222)")
@@ -93,7 +93,7 @@ def main():
     args = parser.parse_args()
 
     app.state.config = {"cdp_url": args.cdp_url, "headless": not args.no_headless, "channel": args.channel}
-    print(f"google-ai-mode v0.3.0 (playwright fetch, unlimited)")
+    print(f"gemini-search-mcp v0.4.0")
     print(f"  API: http://{args.host}:{args.port}/v1")
     print(f"  Browser: {args.cdp_url or f'{args.channel} (headless={not args.no_headless})'}")
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
