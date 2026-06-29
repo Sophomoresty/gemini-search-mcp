@@ -96,6 +96,63 @@ docker compose up -d
 | Rate limit | None (real Chrome fingerprint) |
 | Web search | Built-in (Gemini native) |
 
+## MCP Server (for AI Agents)
+
+Use as a web search tool in Claude Desktop, Claude Code, Cursor, Windsurf, or any MCP-compatible client.
+
+### Claude Code
+
+```bash
+claude mcp add google-ai-mode -- python /path/to/google-ai-mode/mcp_server.py
+```
+
+### Claude Desktop
+
+Add to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "google-ai-mode": {
+      "command": "python",
+      "args": ["/path/to/google-ai-mode/mcp_server.py"],
+      "env": {
+        "CDP_URL": "http://127.0.0.1:9222"
+      }
+    }
+  }
+}
+```
+
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `web_search` | Search the web and get a synthesized answer with sources |
+| `ask` | Ask any question to Google AI Mode (auto-decides whether to search) |
+
+### Example
+
+Once configured, your AI agent can call:
+
+```
+web_search("latest AI regulation news June 2026")
+→ "The EU's AI Act enforcement began on June 1, 2026..."
+
+ask("what is 1847 * 293")
+→ "541171"
+```
+
+### Comparison with Grok MCP
+
+| | Grok MCP | Google AI Mode MCP |
+|---|---|---|
+| Cost | xAI API key (paid) | **Free** |
+| Rate limit | API quota | **Unlimited** |
+| Search quality | Grok + web | **Google Search + Gemini** |
+| X/Twitter search | Yes | No |
+| Setup | API key only | Needs Chrome |
+
 ## Limitations
 
 - Requires Chrome/Edge/Chromium installed (Playwright drives it headless)
