@@ -1,14 +1,14 @@
 [project]
 name = "google-ai-mode"
-version = "0.2.0"
-description = "Reverse-proxy Google Search AI Mode as OpenAI-compatible API (pure protocol, no browser)"
+version = "0.3.0"
+description = "Reverse-proxy Google Search AI Mode as OpenAI-compatible API — unlimited, no rate limit"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
 dependencies = [
+    "playwright>=1.44",
     "fastapi>=0.111",
     "uvicorn[standard]>=0.30",
-    "curl_cffi>=0.7",
 ]
 
 [project.scripts]
