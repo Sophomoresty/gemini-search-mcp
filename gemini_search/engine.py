@@ -54,26 +54,30 @@ _ASK_JS = """
         const fh = await r2.text();
         const div = document.createElement('div');
         div.innerHTML = fh;
-        let text = '';
-        const pTRUV = div.querySelector('.pTRUV');
-        if (pTRUV) {
-            pTRUV.querySelectorAll('script,style,button,span[style*="display:none"]').forEach(x => x.remove());
-            text = pTRUV.textContent.trim();
-        }
-        if (!text) {
-            const n6 = div.querySelector('.n6owBd');
-            if (n6) {
-                n6.querySelectorAll('script,style,button,span[style*="display:none"],.LGKDTe,.SGF5Lb,.YoEHmf').forEach(x => x.remove());
-                text = n6.textContent.trim();
-            }
-        }
-        if (!text) {
+        // Remove non-content elements
+        div.querySelectorAll('script,style,button,noscript,[aria-hidden="true"],span[style*="display:none"],.LGKDTe,.SGF5Lb').forEach(x => x.remove());
+        // Collect text from ALL answer blocks: pTRUV first (short answers), then n6owBd (paragraphs)
+        let parts = [];
+        div.querySelectorAll('.pTRUV').forEach(el => {
+            const t = el.textContent.trim();
+            if (t && t.length > 1) parts.push(t);
+        });
+        div.querySelectorAll('.n6owBd').forEach(el => {
+            const t = el.textContent.trim();
+            if (t && t.length > 10) parts.push(t);
+        });
+        // Fallback: all dir=ltr blocks minus citation containers
+        if (!parts.length) {
+            div.querySelectorAll('.mZJni,.XEqVsf,.ub891').forEach(x => x.remove());
             div.querySelectorAll('[dir="ltr"]').forEach(el => {
-                el.querySelectorAll('script,style,button').forEach(x => x.remove());
                 const t = el.textContent.trim();
-                if (t.length > text.length && !el.classList.contains('mZJni')) text = t;
+                if (t.length > 30) parts.push(t);
             });
         }
+        let text = parts.join('\\n\\n');
+        // Clean trailing UI noise
+        const noise = ['Copy','Share','Good response','Bad response','About this result','Show all','AI responses may include mistakes','Tell me which'];
+        for (const n of noise) { while (text.endsWith(n)) text = text.slice(0, -n.length).trim(); }
         return {ok:true, answer:text, folwrLen:fh.length};
     } catch(e) {
         return {error:'js_exception', message:e.message};
@@ -220,7 +224,8 @@ class AIModeEngine:
         val = result.get("result", {}).get("value")
         exc = result.get("exceptionDetails")
         if exc:
-            raise RuntimeError(f"JS error: {exc.get('text', exc)}")
+            desc = exc.get("exception", {}).get("description", exc.get("text", str(exc)))
+            raise RuntimeError(f"JS error: {desc}")
         return val
 
     async def _navigate(self, url):
