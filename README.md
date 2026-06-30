@@ -117,6 +117,33 @@ curl http://localhost:8080/v1/chat/completions \
 | `CDP_URL` | (none) | Chrome DevTools URL. If set, connects to existing Chrome instead of launching one |
 | `BROWSER_CHANNEL` | `chrome` | Browser to use: `chrome`, `msedge`, `chromium` |
 | `HEADLESS` | `1` | Set to `0` to show browser window |
+| `GEMINI_SEARCH_USER_DATA_DIR` | (none) | Persistent Chrome profile directory. Reuses cookies across runs and is not deleted on shutdown |
+| `GEMINI_SEARCH_CDP_PORT` | `19250` | CDP port used for self-launched Chrome |
+
+
+## Persistent Chrome profile / CAPTCHA priming
+
+If Google shows `/sorry/` CAPTCHA for a fresh temporary profile, prime a persistent profile once in a visible Chrome window, then reuse the same directory in headless mode:
+
+```bash
+# 1) Visible first run: solve CAPTCHA manually if Google asks.
+gemini-search --no-headless --user-data-dir "$HOME/.local/share/gemini-search-mcp/chrome-profile"
+
+# 2) Later runs: reuse the same cookies headlessly.
+GEMINI_SEARCH_USER_DATA_DIR="$HOME/.local/share/gemini-search-mcp/chrome-profile" gemini-search
+```
+
+For Windows-side validation from WSL, run the probe with Windows Python through PowerShell so it launches Windows Chrome:
+
+```powershell
+$profile = Join-Path $env:TEMP 'gemini-search-mcp-persistent-profile'
+python .\scripts\windows_chrome_profile_probe.py `
+  --profile-dir $profile `
+  --mode two-phase `
+  --out .\headless-reuse-result.json
+```
+
+Success evidence is `ok=true` and `stages.headless_reuse.captcha=false` in the JSON output.
 
 ## How It Works
 

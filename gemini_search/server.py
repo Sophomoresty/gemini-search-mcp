@@ -1,6 +1,7 @@
 """OpenAI-compatible API server using Playwright fetch engine."""
 import asyncio
 import json
+import os
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -18,7 +19,12 @@ engine = AIModeEngine()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cfg = app.state.config
-    await engine.start(cdp_url=cfg.get("cdp_url"), headless=cfg["headless"], channel=cfg["channel"])
+    await engine.start(
+        cdp_url=cfg.get("cdp_url"),
+        headless=cfg["headless"],
+        channel=cfg["channel"],
+        user_data_dir=cfg.get("user_data_dir"),
+    )
     print("AI Mode engine ready")
     yield
     await engine.stop()
@@ -93,10 +99,18 @@ def main():
     parser.add_argument("--cdp-url", default=None, help="Connect to existing Chrome (e.g. http://127.0.0.1:9222)")
     parser.add_argument("--channel", default="chrome", choices=["chrome", "msedge", "chromium"])
     parser.add_argument("--no-headless", action="store_true")
+    parser.add_argument("--user-data-dir", default=None, help="Persistent Chrome profile directory to create/reuse")
     args = parser.parse_args()
 
-    app.state.config = {"cdp_url": args.cdp_url, "headless": not args.no_headless, "channel": args.channel}
+    app.state.config = {
+        "cdp_url": args.cdp_url,
+        "headless": not args.no_headless,
+        "channel": args.channel,
+        "user_data_dir": args.user_data_dir or os.environ.get("GEMINI_SEARCH_USER_DATA_DIR"),
+    }
     print(f"gemini-search-mcp v0.4.0")
     print(f"  API: http://{args.host}:{args.port}/v1")
     print(f"  Browser: {args.cdp_url or f'{args.channel} (headless={not args.no_headless})'}")
+    if app.state.config.get("user_data_dir"):
+        print(f"  User data dir: {app.state.config['user_data_dir']}")
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")

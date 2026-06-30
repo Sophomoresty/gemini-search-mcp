@@ -28,7 +28,13 @@ async def _get_engine() -> AIModeEngine:
                 cdp = os.environ.get("CDP_URL")
                 channel = os.environ.get("BROWSER_CHANNEL", "chrome")
                 headless = os.environ.get("HEADLESS", "1") != "0"
-                await _engine.start(cdp_url=cdp, headless=headless, channel=channel)
+                user_data_dir = os.environ.get("GEMINI_SEARCH_USER_DATA_DIR")
+                await _engine.start(
+                    cdp_url=cdp,
+                    headless=headless,
+                    channel=channel,
+                    user_data_dir=user_data_dir,
+                )
     return _engine
 
 

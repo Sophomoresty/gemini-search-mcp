@@ -3,7 +3,7 @@ name = "gemini-search-mcp"
 version = "0.4.0"
 description = "MCP server for web search powered by Google AI Mode (Gemini). Free, unlimited, no API key."
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.10"
 dependencies = [
     "websockets>=12.0",
@@ -19,3 +19,7 @@ gemini-search-mcp = "gemini_search_mcp:main"
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["gemini_search*", "gemini_search_mcp*"]

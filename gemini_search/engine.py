@@ -14,20 +14,14 @@ import os
 import platform
 import shutil
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
+from typing import Optional
 
 try:
     import websockets
 except ImportError:
     websockets = None
-
-try:
-    from playwright.async_api import async_playwright
-    _HAS_PLAYWRIGHT = True
-except ImportError:
-    _HAS_PLAYWRIGHT = False
 
 
 _ASK_JS = """
@@ -126,30 +120,51 @@ class AIModeEngine:
         self._msg_id = 0
         self._cdp_url = None
         self._user_data_dir = None
+        self._owns_user_data_dir = False
 
-    async def start(self, cdp_url=None, headless=True, channel="chrome"):
+    async def start(
+        self,
+        cdp_url=None,
+        headless=True,
+        channel="chrome",
+        user_data_dir: Optional[str] = None,
+    ):
         """Start Chrome and connect via CDP.
 
         If cdp_url is provided, connects to existing Chrome (no subprocess).
         Otherwise launches a new Chrome instance with minimal flags.
+
+        user_data_dir can be supplied to persist cookies across runs. When it is
+        omitted, a temporary profile is created and deleted on stop.
         """
         self._cdp_url = cdp_url
         if cdp_url:
             await self._connect_cdp(cdp_url)
         else:
-            await self._launch_chrome(headless)
+            await self._launch_chrome(headless, user_data_dir=user_data_dir)
         await self._warmup()
 
-    async def _launch_chrome(self, headless=True):
+    def _prepare_user_data_dir(self, user_data_dir: Optional[str]) -> str:
+        if user_data_dir:
+            profile_path = Path(user_data_dir).expanduser().resolve()
+            profile_path.mkdir(parents=True, exist_ok=True)
+            self._user_data_dir = str(profile_path)
+            self._owns_user_data_dir = False
+        else:
+            self._user_data_dir = tempfile.mkdtemp(prefix="gemini-search-mcp-")
+            self._owns_user_data_dir = True
+        return self._user_data_dir
+
+    async def _launch_chrome(self, headless=True, user_data_dir: Optional[str] = None):
         """Launch Chrome subprocess with minimal automation footprint."""
         chrome_path = os.environ.get("CHROME_PATH") or _find_chrome()
-        self._user_data_dir = tempfile.mkdtemp(prefix="gemini-search-mcp-")
-        port = 19250  # dedicated port for this tool
+        profile_dir = self._prepare_user_data_dir(user_data_dir)
+        port = int(os.environ.get("GEMINI_SEARCH_CDP_PORT", "19250"))
 
         args = [
             chrome_path,
             f"--remote-debugging-port={port}",
-            f"--user-data-dir={self._user_data_dir}",
+            f"--user-data-dir={profile_dir}",
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-background-timer-throttling",
@@ -280,11 +295,16 @@ class AIModeEngine:
         """Shutdown."""
         if self._ws:
             await self._ws.close()
+            self._ws = None
         if self._proc:
             self._proc.terminate()
             self._proc.wait()
+            self._proc = None
         if self._user_data_dir:
-            shutil.rmtree(self._user_data_dir, ignore_errors=True)
+            if self._owns_user_data_dir:
+                shutil.rmtree(self._user_data_dir, ignore_errors=True)
+            self._user_data_dir = None
+            self._owns_user_data_dir = False
 
 
 async def e2e_test():
