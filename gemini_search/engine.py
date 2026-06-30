@@ -115,17 +115,18 @@ def _find_chrome(channel: str = "chrome") -> str:
 
     home = Path.home()
     if system == "Windows":
+        by_channel: dict[str, list[Path]] = {"chrome": [], "msedge": [], "chromium": []}
         local_appdata = os.environ.get("LOCALAPPDATA")
         if local_appdata:
             cft_root = Path(local_appdata) / "agent-browser-cli" / "chrome-for-testing"
-            cft = sorted(
-                cft_root.glob("*/chrome-win64/chrome.exe"),
-                key=_version_sort_key,
-                reverse=True,
+            by_channel["chrome"].extend(
+                sorted(
+                    cft_root.glob("*/chrome-win64/chrome.exe"),
+                    key=_version_sort_key,
+                    reverse=True,
+                )
             )
-            candidates.extend(str(path) for path in cft)
 
-        by_channel: dict[str, list[Path]] = {"chrome": [], "msedge": [], "chromium": []}
         for key in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
             base_value = os.environ.get(key)
             if not base_value:

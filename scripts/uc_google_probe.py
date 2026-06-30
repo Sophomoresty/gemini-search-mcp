@@ -48,6 +48,13 @@ TOKEN_PATTERNS = {
 }
 
 
+def _version_sort_key(path: Path) -> tuple[int, ...]:
+    match = re.search(r"(\d+)\.(\d+)\.(\d+)\.(\d+)", str(path))
+    if not match:
+        return ()
+    return tuple(int(part) for part in match.groups())
+
+
 def _iter_existing(paths: list[Path]) -> list[str]:
     return [str(path) for path in paths if path.is_file()]
 
@@ -76,6 +83,7 @@ def _which_chrome() -> str | None:
                 str(path)
                 for path in sorted(
                     (base / "agent-browser-cli" / "chrome-for-testing").glob("*/chrome-win64/chrome.exe"),
+                    key=_version_sort_key,
                     reverse=True,
                 )
             )
