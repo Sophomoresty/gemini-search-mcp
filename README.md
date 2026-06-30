@@ -30,20 +30,22 @@ Think of it as a free, unlimited alternative to Grok MCP / Tavily / SerpAPI, bac
 ## Quick Start
 
 ```bash
-pip install playwright fastapi uvicorn "mcp[cli]"
-playwright install chrome
+pip install -e .
+
+# Optional: install the undetected-chromedriver backend for CAPTCHA probes.
+pip install -e '.[undetected]'
 ```
 
 ### MCP Server (for AI agents)
 
 ```bash
-python mcp_server.py
+gemini-search-mcp
 ```
 
 ### OpenAI-compatible API
 
 ```bash
-python -m gemini_search --port 8080
+gemini-search --port 8080
 ```
 
 ## MCP Integration
@@ -51,7 +53,7 @@ python -m gemini_search --port 8080
 ### Claude Code
 
 ```bash
-claude mcp add gemini-search -- python /path/to/gemini-search-mcp/mcp_server.py
+claude mcp add gemini-search -- gemini-search-mcp
 ```
 
 ### Claude Desktop
@@ -62,8 +64,8 @@ Add to `claude_desktop_config.json`:
 {
   "mcpServers": {
     "gemini-search": {
-      "command": "python",
-      "args": ["/path/to/gemini-search-mcp/mcp_server.py"],
+      "command": "gemini-search-mcp",
+      "args": [],
       "env": {
         "CDP_URL": "http://127.0.0.1:9222"
       }
@@ -74,7 +76,7 @@ Add to `claude_desktop_config.json`:
 
 ### Cursor / Windsurf
 
-Same pattern — point to `mcp_server.py` as an stdio MCP server.
+Same pattern — point to `gemini-search-mcp` as an stdio MCP server.
 
 ## MCP Tools
 
@@ -119,6 +121,9 @@ curl http://localhost:8080/v1/chat/completions \
 | `HEADLESS` | `1` | Set to `0` to show browser window |
 | `GEMINI_SEARCH_USER_DATA_DIR` | (none) | Persistent Chrome profile directory. Reuses cookies across runs and is not deleted on shutdown |
 | `GEMINI_SEARCH_CDP_PORT` | `19250` | CDP port used for self-launched Chrome |
+| `GEMINI_SEARCH_BROWSER_BACKEND` | `subprocess` | Browser launcher: `subprocess` or `undetected` |
+| `GEMINI_SEARCH_PROXY_SERVER` | (none) | Chrome proxy server, e.g. `socks5://127.0.0.1:7897` |
+| `GEMINI_SEARCH_CHROMEDRIVER` | (none) | Chromedriver executable used by the `undetected` backend |
 
 
 ## Persistent Chrome profile / CAPTCHA priming
@@ -145,15 +150,38 @@ python .\scripts\windows_chrome_profile_probe.py `
 
 Success evidence is `ok=true` and `stages.headless_reuse.captcha=false` in the JSON output.
 
+## undetected-chromedriver CAPTCHA probe
+
+When a normal Chrome subprocess gets a Google `/sorry/` CAPTCHA, install the optional backend and run the reusable probe against `google.com.hk`:
+
+```bash
+pip install -e '.[undetected]'
+python scripts/uc_google_probe.py \
+  --proxy socks5://127.0.0.1:7897 \
+  --out-json uc-probe.json
+```
+
+Use the backend only when the probe reports `ok=true`, `captcha=false`, and `successful_for_engine_integration=true`.
+
+```bash
+gemini-search \
+  --browser-backend undetected \
+  --proxy-server socks5://127.0.0.1:7897 \
+  --chromedriver-path /path/to/chromedriver \
+  --no-headless
+```
+
+Observed on Windows Chrome for Testing 148 through Clash: headed UC passed (`captcha=false` and AI Mode tokens present), while headless UC hit Google `/sorry/`.
+
 ## How It Works
 
 Google rate-limits by TLS fingerprint quality — not by IP. Automated HTTP clients (curl, requests, httpx) get throttled after a few requests. But a real Chrome browser's `fetch()` calls are trusted unconditionally.
 
-This tool runs a single Playwright page and executes all queries as `fetch()` inside it, giving every request an authentic Chrome TLS/HTTP2 fingerprint. Google sees normal browser traffic and applies no rate limits.
+This tool runs a single real Chrome tab and executes all queries as `fetch()` inside it over CDP, giving every request an authentic Chrome TLS/HTTP2 fingerprint. Google sees normal browser traffic and applies no rate limits. The optional `undetected` backend still uses the same CDP query path after launch.
 
 ```
 Agent calls web_search("query")
-  → Playwright page.evaluate(fetch)
+  → Chrome Runtime.evaluate(fetch)
     → Google Search AI Mode (token extraction + folwr endpoint)
       → Parse answer from HTML response
         → Return to agent
@@ -167,7 +195,7 @@ Agent calls web_search("query")
 | Rate limit | **None** | API quota | API quota |
 | Search backend | Google Search | Grok + web | Proprietary |
 | Answer quality | Gemini synthesized | Grok synthesized | Extracted snippets |
-| Setup | Chrome + playwright | API key | API key |
+| Setup | Chrome + CDP | API key | API key |
 
 ## Docker
 
@@ -179,7 +207,8 @@ docker compose up -d
 
 - Python 3.10+
 - Chrome, Edge, or Chromium
-- `playwright`, `fastapi`, `uvicorn`, `mcp[cli]`
+- Runtime dependencies from `pyproject.toml`
+- Optional: `undetected-chromedriver` and `selenium` via `pip install -e '.[undetected]'`
 
 ## Limitations
 

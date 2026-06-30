@@ -12,6 +12,12 @@ dependencies = [
     "mcp[cli]>=1.0",
 ]
 
+[project.optional-dependencies]
+undetected = [
+    "undetected-chromedriver>=3.5.5",
+    "selenium>=4.30",
+]
+
 [project.scripts]
 gemini-search = "gemini_search.server:main"
 gemini-search-mcp = "gemini_search_mcp:main"

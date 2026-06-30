@@ -1,4 +1,4 @@
-"""OpenAI-compatible API server using Playwright fetch engine."""
+"""OpenAI-compatible API server using the Google AI Mode engine."""
 import asyncio
 import json
 import os
@@ -24,6 +24,9 @@ async def lifespan(app: FastAPI):
         headless=cfg["headless"],
         channel=cfg["channel"],
         user_data_dir=cfg.get("user_data_dir"),
+        browser_backend=cfg.get("browser_backend"),
+        proxy_server=cfg.get("proxy_server"),
+        chromedriver_path=cfg.get("chromedriver_path"),
     )
     print("AI Mode engine ready")
     yield
@@ -93,13 +96,21 @@ def _build_prompt(messages):
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Gemini Search → OpenAI API (Playwright, unlimited)")
+    parser = argparse.ArgumentParser(description="Gemini Search → OpenAI API")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--cdp-url", default=None, help="Connect to existing Chrome (e.g. http://127.0.0.1:9222)")
     parser.add_argument("--channel", default="chrome", choices=["chrome", "msedge", "chromium"])
     parser.add_argument("--no-headless", action="store_true")
     parser.add_argument("--user-data-dir", default=None, help="Persistent Chrome profile directory to create/reuse")
+    parser.add_argument(
+        "--browser-backend",
+        choices=["subprocess", "undetected"],
+        default=None,
+        help="Browser launch backend. Defaults to GEMINI_SEARCH_BROWSER_BACKEND or subprocess.",
+    )
+    parser.add_argument("--proxy-server", default=None, help="Chrome proxy server, e.g. socks5://127.0.0.1:7897")
+    parser.add_argument("--chromedriver-path", default=None, help="Chromedriver executable for --browser-backend undetected")
     args = parser.parse_args()
 
     app.state.config = {
@@ -107,10 +118,19 @@ def main():
         "headless": not args.no_headless,
         "channel": args.channel,
         "user_data_dir": args.user_data_dir or os.environ.get("GEMINI_SEARCH_USER_DATA_DIR"),
+        "browser_backend": args.browser_backend or os.environ.get("GEMINI_SEARCH_BROWSER_BACKEND", "subprocess"),
+        "proxy_server": args.proxy_server or os.environ.get("GEMINI_SEARCH_PROXY_SERVER"),
+        "chromedriver_path": args.chromedriver_path or os.environ.get("GEMINI_SEARCH_CHROMEDRIVER") or os.environ.get("UC_CHROMEDRIVER"),
     }
     print(f"gemini-search-mcp v0.4.0")
     print(f"  API: http://{args.host}:{args.port}/v1")
-    print(f"  Browser: {args.cdp_url or f'{args.channel} (headless={not args.no_headless})'}")
+    browser_backend = app.state.config["browser_backend"]
+    browser_desc = args.cdp_url or f"{browser_backend}/{args.channel} (headless={not args.no_headless})"
+    print(f"  Browser: {browser_desc}")
     if app.state.config.get("user_data_dir"):
         print(f"  User data dir: {app.state.config['user_data_dir']}")
+    if app.state.config.get("proxy_server"):
+        print(f"  Proxy: {app.state.config['proxy_server']}")
+    if app.state.config.get("chromedriver_path"):
+        print(f"  Chromedriver: {app.state.config['chromedriver_path']}")
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")

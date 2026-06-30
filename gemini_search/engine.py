@@ -1,17 +1,17 @@
 """Lightweight engine for Google AI Mode.
 
-Architecture: launch a real Chrome with minimal flags via subprocess,
-connect via CDP WebSocket, run queries as JS fetch() inside one tab.
-No Playwright — just subprocess + websockets + json.
-
-Key insight: Playwright's launch injects automation markers that Google
-instantly detects (CAPTCHA). A plain subprocess Chrome with only
---remote-debugging-port and --user-data-dir passes as a normal browser.
+The default backend launches a real Chrome/Chromium subprocess and connects to
+it through the Chrome DevTools Protocol (CDP). An optional
+undetected-chromedriver backend can be enabled when a normal subprocess profile
+is challenged by Google CAPTCHA.
 """
+from __future__ import annotations
+
 import asyncio
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import tempfile
@@ -20,7 +20,7 @@ from typing import Optional
 
 try:
     import websockets
-except ImportError:
+except ImportError:  # pragma: no cover - surfaced at runtime by _connect_cdp
     websockets = None
 
 
@@ -80,39 +80,154 @@ _ASK_JS = """
 """
 
 
-def _find_chrome() -> str:
-    """Find Chrome/Chromium binary path on the system."""
-    system = platform.system()
-    candidates = []
-    if system == "Windows":
-        for base in [os.environ.get("PROGRAMFILES", ""), os.environ.get("PROGRAMFILES(X86)", ""),
-                     os.environ.get("LOCALAPPDATA", "")]:
-            if base:
-                candidates.append(os.path.join(base, "Google", "Chrome", "Application", "chrome.exe"))
-                candidates.append(os.path.join(base, "Microsoft", "Edge", "Application", "msedge.exe"))
-    elif system == "Darwin":
-        candidates = [
-            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-            "/Applications/Chromium.app/Contents/MacOS/Chromium",
-        ]
-    else:
-        candidates = ["google-chrome", "google-chrome-stable", "chromium-browser", "chromium"]
 
-    for c in candidates:
-        if os.path.isfile(c):
-            return c
-        found = shutil.which(c)
+def _env_or_value(value: Optional[str], *env_names: str) -> Optional[str]:
+    """Return an explicit value, or the first non-empty environment value."""
+    if value:
+        return value
+    for name in env_names:
+        candidate = os.environ.get(name)
+        if candidate:
+            return candidate
+    return None
+
+
+def _version_sort_key(path: Path) -> tuple[int, ...]:
+    match = re.search(r"(\d+)\.(\d+)\.(\d+)\.(\d+)", str(path))
+    if not match:
+        return ()
+    return tuple(int(part) for part in match.groups())
+
+
+def _existing(paths: list[Path]) -> list[str]:
+    return [str(path) for path in paths if path.is_file()]
+
+
+def _find_chrome(channel: str = "chrome") -> str:
+    """Find a Chrome/Edge/Chromium binary path on the system."""
+    system = platform.system()
+    requested = (channel or "chrome").lower()
+    candidates: list[str] = []
+
+    explicit = _env_or_value(None, "CHROME_PATH", "UC_CHROME_BINARY")
+    if explicit:
+        candidates.append(explicit)
+
+    home = Path.home()
+    if system == "Windows":
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        if local_appdata:
+            cft_root = Path(local_appdata) / "agent-browser-cli" / "chrome-for-testing"
+            cft = sorted(
+                cft_root.glob("*/chrome-win64/chrome.exe"),
+                key=_version_sort_key,
+                reverse=True,
+            )
+            candidates.extend(str(path) for path in cft)
+
+        by_channel: dict[str, list[Path]] = {"chrome": [], "msedge": [], "chromium": []}
+        for key in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
+            base_value = os.environ.get(key)
+            if not base_value:
+                continue
+            base = Path(base_value)
+            by_channel["chrome"].append(base / "Google" / "Chrome" / "Application" / "chrome.exe")
+            by_channel["msedge"].append(base / "Microsoft" / "Edge" / "Application" / "msedge.exe")
+        if requested in by_channel:
+            candidates.extend(_existing(by_channel[requested]))
+        for name, paths in by_channel.items():
+            if name != requested:
+                candidates.extend(_existing(paths))
+        candidates.extend(["chrome.exe", "msedge.exe"])
+    elif system == "Darwin":
+        by_channel = {
+            "chrome": [Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")],
+            "msedge": [Path("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge")],
+            "chromium": [Path("/Applications/Chromium.app/Contents/MacOS/Chromium")],
+        }
+        if requested in by_channel:
+            candidates.extend(_existing(by_channel[requested]))
+        for name, paths in by_channel.items():
+            if name != requested:
+                candidates.extend(_existing(paths))
+    else:
+        local_chromes: list[Path] = []
+        for root in (
+            home / ".local/share/browser-binaries/puppeteer/chrome",
+            home / ".local/share/browser-binaries/ms-playwright",
+        ):
+            local_chromes.extend(root.glob("**/chrome-linux64/chrome"))
+        candidates.extend(
+            str(path)
+            for path in sorted(local_chromes, key=_version_sort_key, reverse=True)
+        )
+        linux_by_channel = {
+            "chrome": ["google-chrome", "google-chrome-stable", "chrome"],
+            "msedge": ["microsoft-edge", "microsoft-edge-stable", "msedge"],
+            "chromium": ["chromium", "chromium-browser"],
+        }
+        if requested in linux_by_channel:
+            candidates.extend(linux_by_channel[requested])
+        for name, names in linux_by_channel.items():
+            if name != requested:
+                candidates.extend(names)
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        path = Path(candidate).expanduser()
+        if path.is_file() and (system == "Windows" or os.access(path, os.X_OK)):
+            return str(path)
+        found = shutil.which(candidate)
         if found:
             return found
     raise RuntimeError("Chrome/Edge/Chromium not found. Install Chrome or set CHROME_PATH env var.")
 
 
+def _chrome_major_version(binary: str) -> Optional[int]:
+    """Best-effort Chrome major version detection for undetected-chromedriver."""
+    path_match = re.search(r"(?:^|[\\/])(\d+)\.\d+\.\d+\.\d+(?:[\\/]|$)", str(binary))
+    if path_match:
+        return int(path_match.group(1))
+
+    try:
+        cp = subprocess.run(
+            [binary, "--version"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=10,
+        )
+    except Exception:
+        return None
+    text = f"{cp.stdout}\n{cp.stderr}"
+    match = re.search(r"(\d+)\.\d+\.\d+\.\d+", text)
+    return int(match.group(1)) if match else None
+
+
+def _normalize_browser_backend(backend: Optional[str]) -> str:
+    value = (backend or "subprocess").strip().lower()
+    aliases = {
+        "raw": "subprocess",
+        "chrome": "subprocess",
+        "subprocess": "subprocess",
+        "uc": "undetected",
+        "undetected": "undetected",
+        "undetected-chromedriver": "undetected",
+    }
+    if value not in aliases:
+        raise ValueError("browser_backend must be 'subprocess' or 'undetected'")
+    return aliases[value]
+
+
 class AIModeEngine:
-    """Single-tab Chrome engine via raw CDP. No Playwright needed."""
+    """Single-tab Chrome engine via raw CDP."""
 
     def __init__(self):
         self._proc = None
+        self._uc_driver = None
         self._ws = None
         self._ws_url = None
         self._page_target = None
@@ -121,6 +236,7 @@ class AIModeEngine:
         self._cdp_url = None
         self._user_data_dir = None
         self._owns_user_data_dir = False
+        self._browser_backend = "subprocess"
 
     async def start(
         self,
@@ -128,21 +244,40 @@ class AIModeEngine:
         headless=True,
         channel="chrome",
         user_data_dir: Optional[str] = None,
+        browser_backend: Optional[str] = None,
+        proxy_server: Optional[str] = None,
+        chromedriver_path: Optional[str] = None,
     ):
         """Start Chrome and connect via CDP.
 
-        If cdp_url is provided, connects to existing Chrome (no subprocess).
-        Otherwise launches a new Chrome instance with minimal flags.
+        If cdp_url is provided, connects to an existing Chrome instance.
+        Otherwise launches a browser using the selected backend:
+        - subprocess: plain Chrome/Edge/Chromium with minimal flags.
+        - undetected: undetected-chromedriver + CDP, useful for CAPTCHA probes.
 
         user_data_dir can be supplied to persist cookies across runs. When it is
         omitted, a temporary profile is created and deleted on stop.
         """
         self._cdp_url = cdp_url
-        if cdp_url:
-            await self._connect_cdp(cdp_url)
-        else:
-            await self._launch_chrome(headless, user_data_dir=user_data_dir)
-        await self._warmup()
+        self._browser_backend = _normalize_browser_backend(
+            _env_or_value(browser_backend, "GEMINI_SEARCH_BROWSER_BACKEND")
+        )
+        try:
+            if cdp_url:
+                await self._connect_cdp(cdp_url)
+            else:
+                await self._launch_chrome(
+                    headless=headless,
+                    channel=channel,
+                    user_data_dir=user_data_dir,
+                    browser_backend=self._browser_backend,
+                    proxy_server=proxy_server,
+                    chromedriver_path=chromedriver_path,
+                )
+            await self._warmup()
+        except Exception:
+            await self.stop()
+            raise
 
     def _prepare_user_data_dir(self, user_data_dir: Optional[str]) -> str:
         if user_data_dir:
@@ -155,11 +290,44 @@ class AIModeEngine:
             self._owns_user_data_dir = True
         return self._user_data_dir
 
-    async def _launch_chrome(self, headless=True, user_data_dir: Optional[str] = None):
+    async def _launch_chrome(
+        self,
+        headless=True,
+        channel="chrome",
+        user_data_dir: Optional[str] = None,
+        browser_backend: Optional[str] = None,
+        proxy_server: Optional[str] = None,
+        chromedriver_path: Optional[str] = None,
+    ):
+        backend = _normalize_browser_backend(browser_backend)
+        if backend == "undetected":
+            await self._launch_undetected_chrome(
+                headless=headless,
+                channel=channel,
+                user_data_dir=user_data_dir,
+                proxy_server=proxy_server,
+                chromedriver_path=chromedriver_path,
+            )
+            return
+        await self._launch_subprocess_chrome(
+            headless=headless,
+            channel=channel,
+            user_data_dir=user_data_dir,
+            proxy_server=proxy_server,
+        )
+
+    async def _launch_subprocess_chrome(
+        self,
+        headless=True,
+        channel="chrome",
+        user_data_dir: Optional[str] = None,
+        proxy_server: Optional[str] = None,
+    ):
         """Launch Chrome subprocess with minimal automation footprint."""
-        chrome_path = os.environ.get("CHROME_PATH") or _find_chrome()
+        chrome_path = _find_chrome(channel)
         profile_dir = self._prepare_user_data_dir(user_data_dir)
         port = int(os.environ.get("GEMINI_SEARCH_CDP_PORT", "19250"))
+        proxy = _env_or_value(proxy_server, "GEMINI_SEARCH_PROXY_SERVER")
 
         args = [
             chrome_path,
@@ -169,6 +337,8 @@ class AIModeEngine:
             "--no-default-browser-check",
             "--disable-background-timer-throttling",
         ]
+        if proxy:
+            args.append(f"--proxy-server={proxy}")
         if headless:
             args.append("--headless=new")
         args.append("about:blank")
@@ -176,26 +346,82 @@ class AIModeEngine:
         self._proc = subprocess.Popen(
             args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
-        # Wait for CDP to be ready
+        await self._wait_for_cdp(port, f"Chrome subprocess (pid={self._proc.pid})")
+        await self._connect_cdp(f"http://127.0.0.1:{port}")
+
+    async def _launch_undetected_chrome(
+        self,
+        headless=True,
+        channel="chrome",
+        user_data_dir: Optional[str] = None,
+        proxy_server: Optional[str] = None,
+        chromedriver_path: Optional[str] = None,
+    ):
+        """Launch Chrome through undetected-chromedriver, then use CDP."""
+        try:
+            import undetected_chromedriver as uc
+        except ImportError as exc:
+            raise RuntimeError(
+                "undetected backend requires: pip install -e '.[undetected]'"
+            ) from exc
+
+        chrome_path = _env_or_value(None, "UC_CHROME_BINARY", "CHROME_PATH") or _find_chrome(channel)
+        profile_dir = self._prepare_user_data_dir(user_data_dir)
+        port = int(os.environ.get("GEMINI_SEARCH_CDP_PORT", "19250"))
+        proxy = _env_or_value(proxy_server, "GEMINI_SEARCH_PROXY_SERVER")
+        driver_path = _env_or_value(
+            chromedriver_path,
+            "GEMINI_SEARCH_CHROMEDRIVER",
+            "UC_CHROMEDRIVER",
+        )
+
+        options = uc.ChromeOptions()
+        options.binary_location = chrome_path
+        options.add_argument("--lang=en-US,en")
+        options.add_argument("--window-size=1365,900")
+        options.add_argument("--no-default-browser-check")
+        options.add_argument("--no-first-run")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        if proxy:
+            options.add_argument(f"--proxy-server={proxy}")
+
+        self._uc_driver = uc.Chrome(
+            options=options,
+            user_data_dir=profile_dir,
+            driver_executable_path=driver_path or None,
+            browser_executable_path=chrome_path,
+            version_main=_chrome_major_version(chrome_path),
+            port=port,
+            headless=headless,
+            use_subprocess=True,
+        )
+        await self._wait_for_cdp(port, "undetected-chromedriver Chrome")
+        await self._connect_cdp(f"http://127.0.0.1:{port}")
+
+    async def _wait_for_cdp(self, port: int, label: str, timeout_sec: float = 20.0):
+        """Wait until Chrome exposes /json/version on the requested CDP port."""
         import urllib.request
-        for _ in range(30):
+
+        last_error = None
+        attempts = max(1, int(timeout_sec * 2))
+        for _ in range(attempts):
             await asyncio.sleep(0.5)
             try:
-                data = urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=2).read()
+                data = urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/json/version", timeout=2
+                ).read()
                 info = json.loads(data)
                 self._ws_url = info["webSocketDebuggerUrl"]
-                break
-            except Exception:
-                continue
-        else:
-            raise RuntimeError(f"Chrome did not start (pid={self._proc.pid})")
-
-        await self._connect_cdp(f"http://127.0.0.1:{port}")
+                return
+            except Exception as exc:  # noqa: BLE001 - diagnostic retry loop
+                last_error = exc
+        raise RuntimeError(f"{label} did not expose CDP on port {port}: {last_error}")
 
     async def _connect_cdp(self, http_url):
         """Connect to Chrome via CDP WebSocket."""
         import urllib.request
-        # Get browser WS URL
+
         try:
             data = urllib.request.urlopen(f"{http_url}/json/version", timeout=5).read()
             info = json.loads(data)
@@ -203,13 +429,11 @@ class AIModeEngine:
         except Exception as e:
             raise RuntimeError(f"Cannot connect to Chrome at {http_url}: {e}")
 
-        # Get or create a page target
         pages = json.loads(urllib.request.urlopen(f"{http_url}/json/list", timeout=5).read())
         page_targets = [p for p in pages if p.get("type") == "page"]
         if page_targets:
             self._page_target = page_targets[0]["webSocketDebuggerUrl"]
         else:
-            # Create new tab
             new_tab = json.loads(urllib.request.urlopen(f"{http_url}/json/new?about:blank", timeout=5).read())
             self._page_target = new_tab["webSocketDebuggerUrl"]
 
@@ -247,7 +471,6 @@ class AIModeEngine:
         """Navigate the page to a URL and wait for load."""
         await self._cdp_send("Page.enable")
         await self._cdp_send("Page.navigate", {"url": url})
-        # Wait for loadEventFired
         for _ in range(60):
             msg = json.loads(await self._ws.recv())
             if msg.get("method") == "Page.loadEventFired":
@@ -257,13 +480,11 @@ class AIModeEngine:
     async def _warmup(self):
         """Navigate to Google search to build cookie session."""
         await self._navigate("https://www.google.com.hk/search?q=hello&hl=en&gl=us")
-        # Check for CAPTCHA
         url = await self._evaluate("window.location.href")
         if "/sorry/" in (url or ""):
             raise RuntimeError(
-                f"Google CAPTCHA during warmup. "
-                "If using self-launch, try with your normal Chrome: "
-                "chrome --remote-debugging-port=9222, then --cdp-url http://127.0.0.1:9222"
+                "Google CAPTCHA during warmup. Try a visible persistent profile, "
+                "an existing Chrome via --cdp-url, or --browser-backend undetected --no-headless."
             )
 
     async def ask(self, question: str, timeout_ms: int = 45000) -> str:
@@ -275,7 +496,6 @@ class AIModeEngine:
             except asyncio.TimeoutError:
                 raise RuntimeError("Query timed out")
             except Exception:
-                # Try recovery
                 await self._warmup()
                 result = await self._evaluate(js)
 
@@ -292,13 +512,23 @@ class AIModeEngine:
             yield text
 
     async def stop(self):
-        """Shutdown."""
+        """Shutdown browser resources and remove owned temporary profile."""
         if self._ws:
             await self._ws.close()
             self._ws = None
+        if self._uc_driver:
+            try:
+                self._uc_driver.quit()
+            except Exception:
+                pass
+            self._uc_driver = None
         if self._proc:
             self._proc.terminate()
-            self._proc.wait()
+            try:
+                self._proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+                self._proc.wait(timeout=5)
             self._proc = None
         if self._user_data_dir:
             if self._owns_user_data_dir:
@@ -309,11 +539,30 @@ class AIModeEngine:
 
 async def e2e_test():
     import time
+
     cdp = os.environ.get("CDP_URL")
+    channel = os.environ.get("BROWSER_CHANNEL", "chrome")
+    headless = os.environ.get("HEADLESS", "1") != "0"
+    browser_backend = os.environ.get("GEMINI_SEARCH_BROWSER_BACKEND")
+    user_data_dir = os.environ.get("GEMINI_SEARCH_USER_DATA_DIR")
+    proxy_server = os.environ.get("GEMINI_SEARCH_PROXY_SERVER")
+    chromedriver_path = os.environ.get("GEMINI_SEARCH_CHROMEDRIVER") or os.environ.get("UC_CHROMEDRIVER")
     engine = AIModeEngine()
-    print(f"Starting... (cdp={cdp or 'self-launch'})")
+    print(
+        "Starting... "
+        f"(cdp={cdp or 'self-launch'}, backend={browser_backend or 'subprocess'}, "
+        f"channel={channel}, headless={headless})"
+    )
     t0 = time.time()
-    await engine.start(cdp_url=cdp)
+    await engine.start(
+        cdp_url=cdp,
+        headless=headless,
+        channel=channel,
+        user_data_dir=user_data_dir,
+        browser_backend=browser_backend,
+        proxy_server=proxy_server,
+        chromedriver_path=chromedriver_path,
+    )
     print(f"  Ready in {time.time()-t0:.1f}s")
 
     tests = [
