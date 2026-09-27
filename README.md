@@ -72,6 +72,18 @@ Add to `claude_desktop_config.json`:
     }
   }
 }
+
+{
+  "mcpServers": {
+    "gemini-search": {
+      "command": "gemini-search-mcp",
+      "args": [],
+      "env": {
+        "CDP_URL": "http://127.0.0.1:9222"
+      }
+    }
+  }
+}
 ```
 
 ### Cursor / Windsurf
@@ -80,10 +92,10 @@ Same pattern — point to `gemini-search-mcp` as an stdio MCP server.
 
 ## MCP Tools
 
-| Tool | Description |
-|------|-------------|
+| Tool                | Description                                                               |
+| ------------------- | ------------------------------------------------------------------------- |
 | `web_search(query)` | Search the web and get a synthesized answer grounded in real-time results |
-| `ask(prompt)` | General question — AI Mode auto-decides whether to search the web |
+| `ask(prompt)`       | General question — AI Mode auto-decides whether to search the web         |
 
 ### Examples
 
@@ -106,25 +118,24 @@ curl http://localhost:8080/v1/chat/completions \
   -d '{"model":"gemini-search","messages":[{"role":"user","content":"What happened in the news today?"}]}'
 ```
 
-| Field | Value |
-|-------|-------|
+| Field    | Value                      |
+| -------- | -------------------------- |
 | Base URL | `http://localhost:8080/v1` |
-| API Key | anything |
-| Model | `gemini-search` |
+| API Key  | anything                   |
+| Model    | `gemini-search`            |
 
 ## Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CDP_URL` | (none) | Chrome DevTools URL. If set, connects to existing Chrome instead of launching one |
-| `BROWSER_CHANNEL` | `chrome` | Browser to use: `chrome`, `msedge`, `chromium` |
-| `HEADLESS` | `1` | Set to `0` to show browser window |
-| `GEMINI_SEARCH_USER_DATA_DIR` | (none) | Persistent Chrome profile directory. Reuses cookies across runs and is not deleted on shutdown |
-| `GEMINI_SEARCH_CDP_PORT` | `19250` | CDP port used for self-launched Chrome |
-| `GEMINI_SEARCH_BROWSER_BACKEND` | `subprocess` | Browser launcher: `subprocess` or `undetected` |
-| `GEMINI_SEARCH_PROXY_SERVER` | (none) | Chrome proxy server, e.g. `socks5://127.0.0.1:7897` |
-| `GEMINI_SEARCH_CHROMEDRIVER` | (none) | Chromedriver executable used by the `undetected` backend |
-
+| Variable                        | Default      | Description                                                                                    |
+| ------------------------------- | ------------ | ---------------------------------------------------------------------------------------------- |
+| `CDP_URL`                       | (none)       | Chrome DevTools URL. If set, connects to existing Chrome instead of launching one              |
+| `BROWSER_CHANNEL`               | `chrome`     | Browser to use: `chrome`, `msedge`, `chromium`                                                 |
+| `HEADLESS`                      | `1`          | Set to `0` to show browser window                                                              |
+| `GEMINI_SEARCH_USER_DATA_DIR`   | (none)       | Persistent Chrome profile directory. Reuses cookies across runs and is not deleted on shutdown |
+| `GEMINI_SEARCH_CDP_PORT`        | `19250`      | CDP port used for self-launched Chrome                                                         |
+| `GEMINI_SEARCH_BROWSER_BACKEND` | `subprocess` | Browser launcher: `subprocess` or `undetected`                                                 |
+| `GEMINI_SEARCH_PROXY_SERVER`    | (none)       | Chrome proxy server, e.g. `socks5://127.0.0.1:7897`                                            |
+| `GEMINI_SEARCH_CHROMEDRIVER`    | (none)       | Chromedriver executable used by the `undetected` backend                                       |
 
 ## Persistent Chrome profile / CAPTCHA priming
 
@@ -189,13 +200,13 @@ Agent calls web_search("query")
 
 ## Comparison
 
-| | gemini-search-mcp | Grok MCP | Tavily |
-|---|---|---|---|
-| Cost | **Free** | xAI API key ($) | API key ($) |
-| Rate limit | **None** | API quota | API quota |
-| Search backend | Google Search | Grok + web | Proprietary |
+|                | gemini-search-mcp  | Grok MCP         | Tavily             |
+| -------------- | ------------------ | ---------------- | ------------------ |
+| Cost           | **Free**           | xAI API key ($)  | API key ($)        |
+| Rate limit     | **None**           | API quota        | API quota          |
+| Search backend | Google Search      | Grok + web       | Proprietary        |
 | Answer quality | Gemini synthesized | Grok synthesized | Extracted snippets |
-| Setup | Chrome + CDP | API key | API key |
+| Setup          | Chrome + CDP       | API key          | API key            |
 
 ## Docker
 
